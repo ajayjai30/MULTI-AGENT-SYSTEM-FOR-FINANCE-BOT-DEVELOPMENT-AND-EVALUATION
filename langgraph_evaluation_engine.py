@@ -14,6 +14,7 @@ from evaluation_tools import (
     LLMPedagogyEvaluator,
     EvidentlyResponseEvaluatorTool,
     FactCheckTool,
+    LLMToneEvaluator,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +30,7 @@ class GraphState(TypedDict):
     pedagogy_results: Dict[str, Any]
     statistics_results: Dict[str, Any]
     fact_checker_results: List[Dict[str, Any]]
+    tone_results: Dict[str, Any]
     error: str
 
 def extract_facts(state: GraphState) -> Dict[str, Any]:
@@ -81,11 +83,59 @@ def run_fact_checker(state: GraphState) -> Dict[str, Any]:
     return {"fact_checker_results": json.loads(results)}
 
 # The aggregate_and_visualize_results function remains the same as your version
+
+def run_tone_evaluator(state: GraphState) -> Dict[str, Any]:
+    """Runs the tone evaluation tool."""
+    logger.info("--- Running tone evaluator ---")
+    question = state["question"]
+    answer = state["answer"]
+    tone_tool = LLMToneEvaluator()
+    results = tone_tool.forward(question=question, answer=answer)
+    return {"tone_results": results}
+
 def aggregate_and_visualize_results(state: GraphState) -> Dict[str, Any]:
-    # ... (full correct code for this function)
     logger.info("--- Aggregating all evaluation results and generating visualizations ---")
-    # ... (rest of the function logic from your file) ...
-    return {} # This node doesn't need to return data to the state
+
+    # Collect all numerical scores
+    scores = {}
+
+    # Extract from clarity results
+    if "clarity_results" in state and state["clarity_results"]:
+        for metric, value in state["clarity_results"].items():
+            if isinstance(value, (int, float, str)) and str(value).isdigit():
+                scores[metric] = float(value)
+
+    # Extract from pedagogy results
+    if "pedagogy_results" in state and state["pedagogy_results"]:
+        for metric, value in state["pedagogy_results"].items():
+            if isinstance(value, (int, float, str)) and str(value).isdigit():
+                scores[metric] = float(value)
+
+    # Extract from statistics results
+    if "statistics_results" in state and state["statistics_results"]:
+        for metric, value in state["statistics_results"].items():
+            if isinstance(value, (int, float)):
+                scores[metric] = value
+
+    # Extract from tone results
+    if "tone_results" in state and state["tone_results"]:
+        for metric, value in state["tone_results"].items():
+            if isinstance(value, (int, float, str)) and str(value).isdigit():
+                scores[metric] = float(value)
+
+    print("\n\n📊 EVALUATION SUMMARY:")
+    for metric, score in scores.items():
+        print(f"  - {metric}: {score}")
+
+    print("\n🔍 FACT CHECK RESULTS:")
+    if "fact_checker_results" in state and state["fact_checker_results"]:
+        for result in state["fact_checker_results"]:
+            status = result.get('status', 'Unknown')
+            emoji = "✅" if status == "Likely True" else "❌" if status == "Likely False" else "⚠️"
+            print(f"  {emoji} Fact: {result.get('fact')}")
+            print(f"      Status: {status}")
+
+    return {}
 
 # --- Graph Assembly ---
 workflow = StateGraph(GraphState)
@@ -95,6 +145,7 @@ workflow.add_node("run_clarity_evaluator", run_clarity_evaluator)
 workflow.add_node("run_pedagogy_evaluator", run_pedagogy_evaluator)
 workflow.add_node("run_statistics_evaluator", run_statistics_evaluator)
 workflow.add_node("run_fact_checker", run_fact_checker)
+workflow.add_node("run_tone_evaluator", run_tone_evaluator)
 workflow.add_node("aggregate_and_visualize", aggregate_and_visualize_results)
 
 workflow.set_entry_point("extract_facts")
@@ -103,11 +154,13 @@ workflow.add_edge("extract_facts", "run_clarity_evaluator")
 workflow.add_edge("extract_facts", "run_pedagogy_evaluator")
 workflow.add_edge("extract_facts", "run_statistics_evaluator")
 workflow.add_edge("extract_facts", "run_fact_checker")
+workflow.add_edge("extract_facts", "run_tone_evaluator")
 
 workflow.add_edge("run_clarity_evaluator", "aggregate_and_visualize")
 workflow.add_edge("run_pedagogy_evaluator", "aggregate_and_visualize")
 workflow.add_edge("run_statistics_evaluator", "aggregate_and_visualize")
 workflow.add_edge("run_fact_checker", "aggregate_and_visualize")
+workflow.add_edge("run_tone_evaluator", "aggregate_and_visualize")
 
 workflow.add_edge("aggregate_and_visualize", END)
 
