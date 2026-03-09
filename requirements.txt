@@ -1,0 +1,17 @@
+# 🔗 Core LangChain packages
+langchain
+langchain-core
+langchain-community
+openai
+# Environment configuration
+python-dotenv            # For .env loading
+langgraph
+
+# libraries for LLM's Evaluation
+pandas
+evidently
+matplotlib
+seaborn
+scikit-learn
+scipy
+sentence-transformers
