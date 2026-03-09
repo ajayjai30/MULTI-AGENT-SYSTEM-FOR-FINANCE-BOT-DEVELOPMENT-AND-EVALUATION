@@ -3,7 +3,7 @@ import os
 import json
 import pandas as pd
 from smolagents import Tool
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 from evidently.llm.templates import MulticlassClassificationPromptTemplate
 from evidently import Dataset, DataDefinition
 from evidently.descriptors import LLMEval, TextLength, Sentiment, SentenceCount

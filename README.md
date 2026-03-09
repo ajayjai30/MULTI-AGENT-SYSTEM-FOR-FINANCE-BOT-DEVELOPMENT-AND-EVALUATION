@@ -43,6 +43,9 @@ Generates sequential questions using an LLM to simulate a natural, multi-turn co
 ### `test_bot.py`
 Testing script for interacting directly with the configured persona bot.
 
+### `app.py`
+Provides a Gradio web interface for interacting with the chatbot in real-time. As you chat with the bot, the LangGraph evaluation engine runs in the background and displays the evaluation metrics (Clarity, Pedagogy, Statistics, Tone, Fact-checking) alongside the conversation.
+
 ### `test_evaluation.py`
 Testing script for evaluating the chatbot's live interactions using the generated questions and executing the LangGraph evaluation engine on each turn.
 
@@ -72,7 +75,21 @@ Configuration file containing the default and fallback LLMs for the application.
 
 ## Usage
 
-Create a chatbot using `create_bot_chain()` from `bot_agent.py`, and evaluate the responses using the LangGraph engine defined in `langgraph_evaluation_engine.py` (Refer to `test_evaluation.py`).
+### Running the Web Interface
+
+The easiest way to interact with the chatbot and see real-time evaluations is through the web interface.
+
+```bash
+python3 app.py
+```
+This will launch a Gradio server. You can access the interface by clicking the local URL provided in the console (usually `http://0.0.0.0:7860`).
+
+### Command Line Evaluation
+
+You can also run evaluations via the command line testing script:
+```bash
+python3 test_evaluation.py
+```
 
 ## Dependencies
 

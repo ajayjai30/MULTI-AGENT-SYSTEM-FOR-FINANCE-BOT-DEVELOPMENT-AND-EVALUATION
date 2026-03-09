@@ -15,3 +15,6 @@ seaborn
 scikit-learn
 scipy
 sentence-transformers
+gradio
+smolagents
+duckduckgo-search
