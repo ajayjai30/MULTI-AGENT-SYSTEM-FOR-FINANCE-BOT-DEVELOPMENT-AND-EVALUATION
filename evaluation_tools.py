@@ -6,8 +6,10 @@ from smolagents import Tool
 from ddgs import DDGS
 from evidently.llm.templates import MulticlassClassificationPromptTemplate
 from evidently import Dataset, DataDefinition
-from evidently.descriptors import LLMEval, TextLength, Sentiment, SemanticSimilarity, SentenceCount
+from evidently.descriptors import LLMEval, TextLength, Sentiment, SentenceCount
 from openai import OpenAI
+
+from llm_wrapper import get_llm
 
 # This tool's logic is from your notebook
 class FactCheckTool(Tool):
@@ -15,6 +17,10 @@ class FactCheckTool(Tool):
     description = "Use this tool to verify a list of factual claims using web search and return an evaluation matrix."
     inputs = { "input": { "type": "string", "description": "A JSON list of factual claims." } }
     output_type = "string"
+
+    def __init__(self):
+        super().__init__()
+        self.llm = get_llm()
 
     def _search_web(self, query):
         with DDGS() as ddgs:
@@ -26,14 +32,37 @@ class FactCheckTool(Tool):
         context_snippets = [res["body"] for res in search_results if "body" in res]
         if not context_snippets:
             return {"fact": fact, "status": "Unverifiable", "evidence": "No relevant results"}
-        combined_context = " ".join(context_snippets).lower()
-        fact_lower = fact.lower()
-        if fact_lower in combined_context:
-            return {"fact": fact, "status": "Likely True", "evidence": context_snippets[:2]}
-        elif any(keyword in combined_context for keyword in fact_lower.split()[:3]):
-            return {"fact": fact, "status": "Partially True", "evidence": context_snippets[:2]}
-        else:
-            return {"fact": fact, "status": "Likely False", "evidence": context_snippets[:2]}
+
+        combined_context = " ".join(context_snippets)
+
+        system_prompt = "You are a factual verification assistant. Your task is to verify a claim against the provided search results. Respond strictly in JSON format with exactly two keys: 'status' (which must be exactly one of: 'Likely True', 'Partially True', 'Likely False', or 'Unverifiable') and 'reasoning' (a brief explanation of your decision based on the search results)."
+
+        user_prompt = f"Claim: {fact}\nSearch Results Context: {combined_context}\nVerify the claim and return the JSON response."
+
+        try:
+            llm_response = self.llm(system_prompt_content=system_prompt, user_content=user_prompt)
+            clean_response = llm_response.strip()
+            if clean_response.startswith("```json"):
+                clean_response = clean_response[7:]
+            if clean_response.endswith("```"):
+                clean_response = clean_response[:-3]
+
+            evaluation = json.loads(clean_response)
+            status = evaluation.get("status", "Unverifiable")
+            if status not in ["Likely True", "Partially True", "Likely False", "Unverifiable"]:
+                status = "Unverifiable"
+
+            return {"fact": fact, "status": status, "evidence": context_snippets[:2]}
+        except Exception as e:
+            # Fallback
+            combined_context_lower = combined_context.lower()
+            fact_lower = fact.lower()
+            if fact_lower in combined_context_lower:
+                return {"fact": fact, "status": "Likely True", "evidence": context_snippets[:2]}
+            elif any(keyword in combined_context_lower for keyword in fact_lower.split()[:3]):
+                return {"fact": fact, "status": "Partially True", "evidence": context_snippets[:2]}
+            else:
+                return {"fact": fact, "status": "Likely False", "evidence": context_snippets[:2]}
 
     def forward(self, input):
         try:
@@ -59,9 +88,7 @@ class EvidentlyResponseEvaluatorTool(Tool):
         self.descriptors = [
             TextLength("answer", alias="Length"),
             SentenceCount("answer", alias="Sentence Count"),
-            Sentiment("answer", alias="Sentiment Score"),
-            SemanticSimilarity(columns=["answer", "question"], alias="Relevance Score"),
-            SemanticSimilarity(columns=["answer", "question"], alias="Hallucination Score")
+            Sentiment("answer", alias="Sentiment Score")
         ]
         self.data_definition = DataDefinition(text_columns=["question", "answer"])
 
@@ -83,7 +110,7 @@ class LLMEvaluatorBase(Tool):
         "answer": { "type": "string", "description": "Response from model." }
     }
     output_type = "object"
-    
+
     def __init__(self):
         super().__init__()
         # The client will now be handled by the main script
@@ -97,7 +124,7 @@ class LLMEvaluatorBase(Tool):
     def forward(self, question: str, answer: str):
         if not (isinstance(question, str) and isinstance(answer, str)):
             raise ValueError("Inputs must include 'question' and 'answer'.")
-        
+
         eval_df = pd.DataFrame([[question, answer]], columns=["question", "answer"])
         data_definition = DataDefinition(text_columns=["question", "answer"])
         eval_dataset = Dataset.from_pandas(eval_df, data_definition=data_definition)
@@ -186,15 +213,53 @@ class LLMClarityEvaluator(LLMEvaluatorBase):
         )
         self.descriptors = [
             LLMEval(
-                column_name="answer", template=self.core_message_template, 
+                column_name="answer", template=self.core_message_template,
                 model="mistralai/mistral-7b-instruct:free", provider="openai", alias="Core Message Clarity"
             ),
             LLMEval(
-                column_name="answer", template=self.sentence_length_template, 
+                column_name="answer", template=self.sentence_length_template,
                 model="mistralai/mistral-7b-instruct:free", provider="openai", alias="Sentence Conciseness"
             ),
             LLMEval(
-                column_name="answer", template=self.completeness_template, 
+                column_name="answer", template=self.completeness_template,
                 model="mistralai/mistral-7b-instruct:free", provider="openai", alias="Completeness of Answer"
+            ),
+        ]
+# Added as an additional evaluation dimension
+class LLMToneEvaluator(LLMEvaluatorBase):
+    name = "tone_evaluator"
+    description = "Evaluates an LLM response on its tone and empathy."
+
+    def _setup_templates(self):
+        self.empathy_template = MulticlassClassificationPromptTemplate(
+            pre_messages=[("system", "You are an expert in communication. Your task is to evaluate the level of empathy in a response.")],
+            criteria="Analyze the empathy level of the response. Does it acknowledge the user's feelings or situation?",
+            category_criteria={
+                "5": "The response is highly empathetic, validating the user's situation and providing supportive language.",
+                "4": "The response is generally empathetic and supportive.",
+                "3": "The response is neutral, focusing primarily on facts without much emotional acknowledgment.",
+                "2": "The response is somewhat cold or dismissive of the user's context.",
+                "1": "The response is completely apathetic or inappropriate for the user's situation."
+            }
+        )
+        self.professionalism_template = MulticlassClassificationPromptTemplate(
+            pre_messages=[("system", "You are an expert editor focused on professional communication. Your task is to evaluate the professionalism of a response.")],
+            criteria="Analyze the tone of the response for professionalism and appropriate language.",
+            category_criteria={
+                "5": "The response is exceptionally professional, courteous, and appropriate.",
+                "4": "The response is professional and polite.",
+                "3": "The response is casual but acceptable.",
+                "2": "The response is overly informal or slightly unprofessional.",
+                "1": "The response is unprofessional, rude, or uses inappropriate language."
+            }
+        )
+        self.descriptors = [
+            LLMEval(
+                column_name="answer", template=self.empathy_template,
+                model="mistralai/mistral-7b-instruct:free", provider="openai", alias="Empathy Level"
+            ),
+            LLMEval(
+                column_name="answer", template=self.professionalism_template,
+                model="mistralai/mistral-7b-instruct:free", provider="openai", alias="Professionalism"
             ),
         ]
